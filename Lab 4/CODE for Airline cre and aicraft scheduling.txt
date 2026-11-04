@@ -1,0 +1,117 @@
+import numpy as np
+import random
+
+# 1. FLIGHT DETAILS
+flights = [
+    {"name": "F1", "start": 8, "end": 10},
+    {"name": "F2", "start": 9, "end": 11},
+    {"name": "F3", "start": 14, "end": 16},
+    {"name": "F4", "start": 17, "end": 19}
+]
+
+aircraft = 2
+crew = 3
+
+# Availability settings (hours)
+turnaround = 1
+crew_rest = 1
+
+# 2. ACO PARAMETERS
+ants = 20
+iterations = 50
+alpha = 1
+beta = 2
+rho = 0.5
+Q = 100
+
+F = len(flights)
+
+pheromone = np.ones((F, aircraft, crew))
+
+best_schedule = None
+best_cost = float("inf")
+
+# 3. ANT COLONY OPTIMIZATION
+
+for iteration in range(iterations):
+
+    for ant in range(ants):
+
+        aircraft_free = [0] * aircraft
+        crew_free = [0] * crew
+
+        schedule = []
+        total_cost = 0
+        valid = True
+
+        for i, flight in enumerate(flights):
+
+            options = []
+            probabilities = []
+
+            # Find available aircraft and crew
+            for a in range(aircraft):
+                for c in range(crew):
+
+                    if (aircraft_free[a] <= flight["start"]
+                        and crew_free[c] <= flight["start"]):
+
+                        options.append((a, c))
+
+                        p = (pheromone[i][a][c] ** alpha)
+                        probabilities.append(p)
+
+            # Check availability
+            if not options:
+                valid = False
+                break
+
+            probabilities = np.array(probabilities)
+            probabilities /= probabilities.sum()
+
+            # Select aircraft and crew
+            selected = random.choices(
+                options, weights=probabilities
+            )[0]
+
+            a, c = selected
+
+            # Calculate waiting cost
+            cost = (
+                flight["start"] - aircraft_free[a]
+                + flight["start"] - crew_free[c]
+            )
+
+            total_cost += cost
+
+            # Update availability
+            aircraft_free[a] = flight["end"] + turnaround
+            crew_free[c] = flight["end"] + crew_rest
+
+            schedule.append((flight["name"], a + 1, c + 1))
+
+        # 4. SAVE BEST SCHEDULE
+        if valid and total_cost < best_cost:
+            best_cost = total_cost
+            best_schedule = schedule.copy()
+
+    # 5. PHEROMONE UPDATE
+    pheromone *= (1 - rho)
+
+    if best_schedule is not None:
+        for i, (name, a, c) in enumerate(best_schedule):
+            pheromone[i][a-1][c-1] += Q / (1 + best_cost)
+
+# 6. DISPLAY RESULTS
+
+print("\n===== OPTIMIZED AIRLINE SCHEDULE =====")
+
+if best_schedule is not None:
+
+    for flight, a, c in best_schedule:
+        print(f"{flight}: Aircraft {a}, Crew {c}")
+
+    print("\nMinimum Scheduling Cost:", best_cost)
+
+else:
+    print("No feasible schedule found.")
