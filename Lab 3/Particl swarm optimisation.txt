@@ -1,0 +1,129 @@
+import numpy as np
+
+# Set random seed so the results are identical every time we run it
+np.random.seed(42)
+
+# ==========================================
+# 📊 INTERSECTION CONFIGURATION & TRAFFIC DATA
+# ==========================================
+# 4 Traffic Lights: P1 (North-South), P2 (NS Left), P3 (East-West), P4 (EW Left)
+TRAFFIC_DEMANDS = np.array([800, 300, 600, 250])  # Vehicles per hour per lane
+TOTAL_CYCLE = 120                                  # Total cycle time must be exactly 120 seconds
+MIN_GREEN = 15                                     # For safety, no light can go below 15 seconds
+
+# PSO Swarm Configurations
+NUM_PARTICLES = 30
+MAX_ITERATIONS = 50
+C1, C2 = 1.8, 1.8  # How much they trust themselves (C1) vs the leader (C2)
+W_MAX, W_MIN = 0.9, 0.4  # Speed brakes: Starts fast to explore, slows down to fine-tune
+
+# ==========================================
+# ⚖️ THE RULE ENFORCER (CONSTRAINTS)
+# ==========================================
+def apply_traffic_constraints(position):
+    """Forces timing plans to stay above 15s and add up to exactly 120s."""
+    # 1. Clamp values to be at least the safety minimum
+    position = np.clip(position, MIN_GREEN, TOTAL_CYCLE)
+    
+    # 2. Scale numbers proportionally so they add up to exactly 120 seconds
+    total = np.sum(position)
+    if total > 0:
+        position = (position / total) * TOTAL_CYCLE
+        
+    # 3. Double-check for minor decimals that broke the safety limit during scaling
+    for i in range(4):
+        if position[i] < MIN_GREEN:
+            deficit = MIN_GREEN - position[i]
+            position[i] = MIN_GREEN
+            position[np.argmax(position)] -= deficit # Steal time from the largest phase
+    return position
+
+# ==========================================
+# 🚗 THE COST CALCULATOR (OBJECTIVE FUNCTION)
+# ==========================================
+def calculate_traffic_delay(allocation):
+    """Webster Traffic Model: Calculates average delay per vehicle in seconds."""
+    total_delay = 0.0
+    saturation_flow = 1800 # Max cars that can pass per hour if light stayed green
+    
+    for i in range(4):
+        q = TRAFFIC_DEMANDS[i]
+        g = allocation[i]
+        
+        # Calculate how many cars this green light duration can handle
+        capacity = saturation_flow * (g / TOTAL_CYCLE)
+        saturation_ratio = q / max(capacity, 1.0)
+        
+        # d1: Regular waiting delay
+        d1 = (TOTAL_CYCLE * (1 - g / TOTAL_CYCLE)**2) / (2 * (1 - min(1.0, saturation_ratio) * (g / TOTAL_CYCLE)))
+        
+        # d2: Backlog queue penalty if green light is way too short for demand
+        d2 = 0.0
+        if saturation_ratio > 0.8:
+            d2 = 900 * ((saturation_ratio - 1) + np.sqrt((saturation_ratio - 1)**2 + (4 * saturation_ratio) / capacity))
+            
+        total_delay += (d1 + d2) * q
+        
+    return total_delay / np.sum(TRAFFIC_DEMANDS)
+
+# ==========================================
+# 🐦 THE SWARM OPTIMIZATION ENGINE
+# ==========================================
+# 1. Spawn Initial Swarm randomly using Dirichlet splits (guarantees safe totals)
+remaining_time = TOTAL_CYCLE - (4 * MIN_GREEN)
+positions = np.array([MIN_GREEN + np.random.dirichlet(np.ones(4)) * remaining_time for _ in range(NUM_PARTICLES)])
+velocities = np.zeros_like(positions)
+
+# Set up initial memories
+p_best_positions = np.copy(positions)
+p_best_scores = np.array([calculate_traffic_delay(p) for p in positions])
+
+# Declare the first leader (Global Best)
+g_best_idx = np.argmin(p_best_scores)
+g_best_position = np.copy(p_best_positions[g_best_idx])
+g_best_score = p_best_scores[g_best_idx]
+
+# 2. Main Exploration Loop
+print("Starting the Swarm Optimization engine...")
+for it in range(MAX_ITERATIONS):
+    # Make particles slow down gradually over time to prevent overshooting
+    w = W_MAX - (W_MAX - W_MIN) * (it / MAX_ITERATIONS)
+    
+    for i in range(NUM_PARTICLES):
+        r1, r2 = np.random.rand(4), np.random.rand(4)
+        
+        # Tweak path direction based on past memory and group leader
+        cognitive = C1 * r1 * (p_best_positions[i] - positions[i])
+        social = C2 * r2 * (g_best_position - positions[i])
+        velocities[i] = w * velocities[i] + cognitive + social
+        
+        # Move the particle and clean up invalid times
+        positions[i] += velocities[i]
+        positions[i] = apply_traffic_constraints(positions[i])
+        
+        # Score the new movement
+        score = calculate_traffic_delay(positions[i])
+        
+        # Update individual memory
+        if score < p_best_scores[i]:
+            p_best_scores[i] = score
+            p_best_positions[i] = np.copy(positions[i])
+            
+            # Update global leader if a breakthrough is made
+            if score < g_best_score:
+                g_best_score = score
+                g_best_position = np.copy(positions[i])
+
+    if (it + 1) % 10 == 0:
+        print(f"  Round {it+1}/{MAX_ITERATIONS} -> Target Avg Delay: {g_best_score:.2f} seconds/vehicle")
+
+# ==========================================
+# 🏆 PRINTING FINAL RESULTS
+# ==========================================
+print("\n🏆 Optimization Complete! Optimal Setup Found:")
+print("-" * 47)
+for idx, green_time in enumerate(g_best_position, start=1):
+    print(f" Phase {idx} (Demand: {TRAFFIC_DEMANDS[idx-1]} veh/h) ➡️ Green Time: {green_time:.1f} seconds")
+print("-" * 47)
+print(f" Calculated Avg Waiting Time : {g_best_score:.2f} seconds per vehicle")
+print(f" Checked Total Cycle Duration: {np.sum(g_best_position):.1f} seconds")
