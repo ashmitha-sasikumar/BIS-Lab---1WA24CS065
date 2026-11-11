@@ -1,0 +1,158 @@
+
+import sqlite3
+import random
+import time
+import math
+import numpy as np
+
+# -----------------------------------
+# 1. Create SQLite Database
+# -----------------------------------
+
+conn = sqlite3.connect(":memory:")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE students (
+    id INTEGER,
+    name TEXT,
+    department TEXT,
+    marks INTEGER
+)
+""")
+
+# Insert sample records
+data = [
+    (i, f"Student{i}",
+     random.choice(["CSE", "ECE", "ISE"]),
+     random.randint(40, 100))
+    for i in range(1, 10001)
+]
+
+cursor.executemany(
+    "INSERT INTO students VALUES (?, ?, ?, ?)",
+    data
+)
+conn.commit()
+
+# -----------------------------------
+# 2. Define Query Execution
+# -----------------------------------
+
+queries = [
+    """
+    SELECT * FROM students
+    WHERE department = 'CSE'
+    AND marks > 80
+    """,
+
+    """
+    SELECT name, marks FROM students
+    WHERE marks > 80
+    AND department = 'CSE'
+    """
+]
+
+# -----------------------------------
+# 3. Fitness Function
+# -----------------------------------
+
+def fitness(query):
+    start = time.perf_counter()
+
+    cursor.execute(query)
+    cursor.fetchall()
+
+    execution_time = time.perf_counter() - start
+
+    return execution_time
+
+
+# -----------------------------------
+# 4. Cuckoo Search Parameters
+# -----------------------------------
+
+NESTS = 10
+ITERATIONS = 20
+PA = 0.25
+
+# Each nest represents a query plan
+nests = random.choices(queries, k=NESTS)
+
+# -----------------------------------
+# 5. Lévy Flight
+# -----------------------------------
+
+def levy_flight():
+    beta = 1.5
+
+    sigma = (
+        math.gamma(1 + beta)
+        * math.sin(math.pi * beta / 2)
+        /
+        (
+            math.gamma((1 + beta) / 2)
+            * beta
+            * 2 ** ((beta - 1) / 2)
+        )
+    ) ** (1 / beta)
+
+    u = np.random.normal(0, sigma)
+    v = np.random.normal(0, 1)
+
+    return u / (abs(v) ** (1 / beta))
+
+
+# -----------------------------------
+# 6. Cuckoo Search Algorithm
+# -----------------------------------
+
+best_query = None
+best_cost = float("inf")
+
+for iteration in range(ITERATIONS):
+
+    for i in range(NESTS):
+
+        # Generate a new candidate
+        step = levy_flight()
+
+        if step > 0:
+            new_query = random.choice(queries)
+        else:
+            new_query = nests[i]
+
+        new_cost = fitness(new_query)
+        old_cost = fitness(nests[i])
+
+        # Replace nest if better solution found
+        if new_cost < old_cost:
+            nests[i] = new_query
+
+        # Update global best
+        if new_cost < best_cost:
+            best_cost = new_cost
+            best_query = new_query
+
+    # Abandon poor nests
+    for i in range(NESTS):
+        if random.random() < PA:
+            nests[i] = random.choice(queries)
+
+    print(
+        f"Iteration {iteration + 1}: "
+        f"Best Execution Time = {best_cost:.6f} seconds"
+    )
+
+# -----------------------------------
+# 7. Display Optimal Query
+# -----------------------------------
+
+print("\n========== OPTIMIZED QUERY ==========")
+
+print(best_query)
+
+print("\nMinimum Execution Time:",
+      best_cost, "seconds")
+
+conn.close()
